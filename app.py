@@ -2,31 +2,19 @@ import streamlit as st
 import os
 import re
 import time
+import pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 import google.generativeai as genai
-import pandas as pd
 
-
-# Load .env and fallback to secrets.toml
+# Load .env and fallback to Streamlit secrets
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or st.secrets.get("gemini", {}).get("api_key", "")
 
 # Configure page
-st.set_page_config(
-    page_title="Feedback Form Summarizer",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="📊 Feedback Summarizer", layout="wide")
 
-def clean_text(text):
-    if not text or text.strip() == '':
-        return ''
-    text = str(text).strip()
-    text = re.sub(r'\s+', ' ', text)
-    return text
-
+# --- CSV parsing and cleaning ---
 def parse_csv_simple(file_content):
     lines = file_content.strip().split('\n')
     if not lines:
@@ -36,10 +24,15 @@ def parse_csv_simple(file_content):
     for line in lines[1:]:
         if line.strip():
             row = [cell.strip().strip('"') for cell in line.split(',')]
-            while len(row) < len(header):
-                row.append('')
+            if len(row) < len(header):
+                row += [''] * (len(header) - len(row))
+            elif len(row) > len(header):
+                row = row[:len(header)]
             data.append(row)
     return header, data
+
+def clean_text(text):
+    return re.sub(r'\s+', ' ', str(text).strip()) if text and str(text).strip() else ''
 
 def is_numeric_response(responses):
     numeric_count = 0
@@ -55,6 +48,7 @@ def is_numeric_response(responses):
                 pass
     return total_count > 0 and numeric_count / total_count > 0.7
 
+# --- Basic fallback analysis ---
 def analyze_question_basic(question, responses):
     from collections import Counter
     sentiments = {"Positive": 0, "Negative": 0, "Neutral": 0}
@@ -70,8 +64,7 @@ def analyze_question_basic(question, responses):
     all_words = ' '.join(responses).lower().split()
     common = Counter(all_words)
     keywords = [w for w, _ in common.most_common(5) if len(w) > 3]
-    summary = f"Based on {len(responses)} responses, sentiment is mostly "
-    summary += max(sentiments, key=sentiments.get).lower() + "."
+    summary = f"Based on {len(responses)} responses, feedback is mostly {max(sentiments, key=sentiments.get).lower()}."
     return {
         "summary": summary,
         "response_count": len(responses),
@@ -80,6 +73,7 @@ def analyze_question_basic(question, responses):
         "keywords": keywords
     }
 
+# --- Gemini-powered AI analysis ---
 def analyze_question_with_ai(question, responses, api_key):
     valid = [clean_text(r) for r in responses if clean_text(r)]
     if not valid:
@@ -104,7 +98,7 @@ def analyze_question_with_ai(question, responses, api_key):
         model = genai.GenerativeModel("gemini-1.5-flash")
         sample = valid[:15]
         prompt = f"""
-Analyze the following feedback for: "{question}".
+Analyze the following feedback for the question: "{question}".
 
 Responses:
 {chr(10).join(['- ' + r for r in sample])}
@@ -135,62 +129,77 @@ word1, word2, word3, word4, word5
             elif block.startswith("SENTIMENT:"):
                 lines = block.splitlines()[1:]
                 for l in lines:
-                    k, v = l.split(':')
-                    sentiment[k.strip()] = int(v.strip())
+                    if ':' in l:
+                        k, v = l.split(':')
+                        sentiment[k.strip()] = int(v.strip())
             elif block.startswith("KEYWORDS:"):
                 kwline = block.replace("KEYWORDS:", "").strip()
                 keywords = [k.strip() for k in kwline.split(',')]
         return {
-            "summary": summary,
+            "summary": summary or f"Analysis of {len(valid)} responses shows various themes.",
             "response_count": len(valid),
             "avg_rating": None,
             "sentiment": sentiment,
             "keywords": keywords
         }
     except Exception as e:
-        st.warning(f"AI error: {e}. Using basic fallback.")
+        st.warning(f"AI error: {e}. Using basic analysis.")
         return analyze_question_basic(question, valid)
 
+# --- Main Streamlit UI ---
 def main():
-    st.title("📊 Feedback Form Summarizer")
-    st.markdown("### Analyze and summarize feedback responses with AI-powered insights")
+    st.title("📊 Feedback Summarizer")
+    st.markdown("Analyze and summarize responses using AI (or basic fallback).")
 
-    # Sidebar file upload
+    # Upload file
     with st.sidebar:
-        st.header("📁 Upload Feedback CSV")
-        uploaded_file = st.file_uploader("Choose a file", type=["csv"])
+        st.header("Upload CSV")
+        uploaded = st.file_uploader("Upload", type=["csv"])
+        if GEMINI_API_KEY:
+            st.success("✅ AI mode enabled")
+        else:
+            st.warning("⚠️ Using fallback mode (no AI key found)")
 
-    if not uploaded_file:
-        st.info("Upload a CSV file with survey questions as columns.")
+    if not uploaded:
+        st.info("Upload a feedback CSV to begin.")
         return
 
-    file_content = uploaded_file.getvalue().decode('utf-8')
-    headers, data = parse_csv_simple(file_content)
+    content = uploaded.getvalue().decode("utf-8")
+    headers, data = parse_csv_simple(content)
 
     if not headers or not data:
-        st.error("Invalid CSV file.")
+        st.error("Invalid file.")
         return
 
-    st.success(f"Loaded {len(data)} responses across {len(headers)} questions.")
-    st.dataframe(pd.DataFrame(data, columns=headers).head())
+    st.success(f"Loaded {len(data)} responses and {len(headers)} questions.")
+    df_display = pd.DataFrame(data, columns=headers)
+    st.dataframe(df_display.head())
 
-    st.markdown("### 📝 Analysis per Question")
+    st.markdown("## 📝 Question Analysis")
+    report_lines = [
+        "FEEDBACK SUMMARY REPORT",
+        "="*40,
+        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"Responses: {len(data)}",
+        f"Questions: {len(headers)}",
+        ""
+    ]
+
     for i, question in enumerate(headers):
         responses = [row[i] if i < len(row) else '' for row in data]
         analysis = analyze_question_with_ai(question, responses, GEMINI_API_KEY)
 
         with st.expander(f"Q{i+1}: {question}", expanded=False):
-            st.write("**Summary:**")
-            st.info(analysis["summary"])
+            st.markdown(f"**Summary:**\n\n{analysis['summary']}")
 
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Responses", analysis["response_count"])
-            if analysis["avg_rating"]:
-                col2.metric("Avg Rating", f"{analysis['avg_rating']:.2f}")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Responses", analysis['response_count'])
+            if analysis['avg_rating']:
+                c2.metric("Avg Rating", f"{analysis['avg_rating']:.2f}")
             else:
-                col2.metric("Type", "Text")
+                c2.metric("Response Type", "Text")
             if len(data) > 0:
-                col3.metric("Response Rate", f"{(analysis['response_count']/len(data))*100:.1f}%")
+                c3.metric("Response Rate", f"{(analysis['response_count']/len(data))*100:.1f}%")
 
             if analysis["sentiment"]:
                 st.markdown("**Sentiment:**")
@@ -200,32 +209,23 @@ def main():
                 s3.metric("Negative", analysis["sentiment"].get("Negative", 0))
 
             if analysis["keywords"]:
-                st.markdown("**Keywords:**")
-                st.write(", ".join(analysis["keywords"]))
+                st.markdown("**Top Keywords:**")
+                st.write("• " + " • ".join(analysis["keywords"]))
 
-    # Download text report
-    st.markdown("### 📄 Download Report")
-    report_lines = [
-        "FEEDBACK SUMMARY REPORT",
-        "="*40,
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-        f"Responses: {len(data)}",
-        f"Questions: {len(headers)}",
-        ""
-    ]
-    for i, question in enumerate(headers):
-        responses = [row[i] if i < len(row) else '' for row in data]
-        analysis = analyze_question_with_ai(question, responses, GEMINI_API_KEY)
+        # Build report line
         report_lines.append(f"Q{i+1}: {question}")
-        report_lines.append(f"Summary: {analysis['summary']}")
+        report_lines.append("-" * 30)
+        report_lines.append("Summary: " + analysis["summary"])
         if analysis["sentiment"]:
             report_lines.append("Sentiment: " + str(analysis["sentiment"]))
         if analysis["keywords"]:
             report_lines.append("Keywords: " + ", ".join(analysis["keywords"]))
         report_lines.append("")
 
+    # Download section
+    st.markdown("## 📥 Download Summary")
     st.download_button(
-        label="⬇️ Download TXT Report",
+        "📄 Download .txt Report",
         data="\n".join(report_lines),
         file_name=f"feedback_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
         mime="text/plain"
