@@ -5,6 +5,8 @@ import time
 from datetime import datetime
 from dotenv import load_dotenv
 import google.generativeai as genai
+import pandas as pd
+
 
 # Load .env and fallback to secrets.toml
 load_dotenv()
