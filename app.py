@@ -95,7 +95,7 @@ def analyze_question_with_ai(question, responses, api_key):
 
     try:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.0-flash")
         sample = valid[:15]
         prompt = f"""
 Analyze the following feedback for the question: "{question}".
