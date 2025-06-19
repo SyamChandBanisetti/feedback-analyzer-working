@@ -4,3 +4,8 @@ plotly
 python-dotenv
 google-generativeai
 openpyxl
+streamlit
+python-dotenv
+pandas
+google-generativeai
+scikit-learn  # Only if you add keyword extraction via TF-IDF
